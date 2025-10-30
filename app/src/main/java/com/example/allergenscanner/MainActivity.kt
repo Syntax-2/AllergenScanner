@@ -1,8 +1,11 @@
-package com.example.allergenscanner // FIXED: Must match your file path
+package com.example.allergenscanner // Make sure this matches your file path
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -14,8 +17,6 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-// Note: We import AnimatedVisibility, but will use the fully qualified name to solve the error
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -28,7 +29,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
@@ -38,6 +42,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,6 +61,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
+import kotlin.random.Random
 
 /*
  * 5. This is our main screen. It handles Camera Permission,
@@ -221,14 +228,15 @@ fun AllergenScannerScreen(
                 val currentErrorMessage = uiState.errorMessage
                 val currentProduct = uiState.product
 
-                // Content of the bottom sheet
-                Box(
+                // FIXED: This is now a Column that can scroll
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 220.dp) // Give it some space
                         .padding(16.dp)
-                        .animateContentSize(), // NEW: Animate size changes
-                    contentAlignment = Alignment.TopCenter
+                        .animateContentSize() // NEW: Animate size changes
+                        .verticalScroll(rememberScrollState()), // FIXED: Scrolling is here
+                    horizontalAlignment = Alignment.CenterHorizontally // FIXED: Alignment is here
                 ) {
                     when {
                         // Loading
@@ -237,15 +245,21 @@ fun AllergenScannerScreen(
                         }
                         // Error
                         currentErrorMessage != null -> {
-                            InfoColumn(
+                            InfoColumn( // This no longer scrolls or has a button
                                 icon = Icons.Filled.Error,
                                 title = "Error",
-                                buttonText = "Scan Again",
-                                onButtonClick = { viewModel.clearProduct() },
                                 titleColor = MaterialTheme.colorScheme.error
                             ) {
                                 // Pass error message as content
                                 Text(currentErrorMessage, fontSize = 16.sp, textAlign = TextAlign.Center)
+                            }
+                            // FIXED: Button is now outside InfoColumn
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = { viewModel.clearProduct() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Scan Again")
                             }
                         }
                         // Success
@@ -257,41 +271,80 @@ fun AllergenScannerScreen(
                                 }
                                 ?: emptyList()
 
-                            val hasAllergens = allergensList.isNotEmpty()
+                            // --- NEW: Get traces list ---
+                            val tracesList = currentProduct.tracesTags
+                                ?.map {
+                                    it.removePrefix("en:").replace("-", " ")
+                                        .replaceFirstChar { char -> if (char.isLowerCase()) char.uppercase() else char.toString() }
+                                }
+                                ?: emptyList()
 
-                            InfoColumn(
-                                icon = if (hasAllergens) Icons.Filled.Info else Icons.Filled.CheckCircle,
+                            val hasAllergens = allergensList.isNotEmpty()
+                            val hasTraces = tracesList.isNotEmpty()
+                            // --- NEW: Only celebrate if BOTH are empty ---
+                            val isTrulyClear = !hasAllergens && !hasTraces
+
+                            InfoColumn( // This no longer scrolls or has a button
+                                icon = if (isTrulyClear) Icons.Filled.CheckCircle else Icons.Filled.Info,
                                 title = currentProduct.productName ?: "Unknown Product",
-                                buttonText = "Scan New Item",
-                                onButtonClick = { viewModel.clearProduct() },
-                                titleColor = if (hasAllergens) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                titleColor = if (isTrulyClear) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                             ) {
-                                // NEW: Pass allergens as content
-                                Text("Allergens:", fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
-                                Spacer(modifier = Modifier.height(8.dp))
-                                if (hasAllergens) {
-                                    FlowRow(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        allergensList.forEach { allergen ->
-                                            Card(
-                                                shape = RoundedCornerShape(8.dp),
-                                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-                                            ) {
-                                                Text(
-                                                    allergen,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                                    fontSize = 14.sp
-                                                )
+                                // This content Column is fine, as it's inside the parent scrolling Column
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    // --- Main Allergens ---
+                                    Text("Contains Allergens:", fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    if (hasAllergens) {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            allergensList.forEach { allergen ->
+                                                Chip(allergen, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
                                             }
                                         }
+                                    } else {
+                                        Text("None found.", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                                     }
-                                } else {
-                                    Text("No allergen information found.")
+
+                                    // --- Traces ("May Contain") ---
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text("May Contain Traces Of:", fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    if (hasTraces) {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            tracesList.forEach { trace ->
+                                                Chip(trace, Color(0xFFFFF0E0), Color(0xFF8B4513)) // Light Orange / Brown text
+                                            }
+                                        }
+                                    } else {
+                                        Text("None found.", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                                    }
+
+                                    // --- NEW: Celebration ---
+                                    if (isTrulyClear) {
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            NoAllergensCelebration()
+                                        }
+                                    }
                                 }
+                            }
+                            // FIXED: Button is now outside InfoColumn
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = { viewModel.clearProduct() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Scan New Item")
                             }
                         }
                     }
@@ -301,6 +354,23 @@ fun AllergenScannerScreen(
     }
 }
 
+// NEW: Reusable Chip composable
+@Composable
+fun Chip(text: String, backgroundColor: Color, textColor: Color) {
+    Card(
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = backgroundColor)
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            color = textColor,
+            fontSize = 14.sp
+        )
+    }
+}
+
+
 @Composable
 fun CameraPreview(
     onBarcodeScanned: (String) -> Unit,
@@ -309,7 +379,6 @@ fun CameraPreview(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-    // FIXED: Typo was 'mutableStateof' (lowercase 'o')
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
 
     // 1. Remember the analyzer instance itself
@@ -385,7 +454,6 @@ private class BarcodeAnalyzer(
     @Volatile var isPaused: Boolean // Use @Volatile for thread safety
 ) : ImageAnalysis.Analyzer {
 
-    // FIXED: Removed the junk text that was pasted in here
     private val options = BarcodeScannerOptions.Builder()
         .setBarcodeFormats(Barcode.FORMAT_EAN_13, Barcode.FORMAT_UPC_A, Barcode.FORMAT_EAN_8)
         .build()
@@ -473,52 +541,137 @@ fun ScannerOverlay(modifier: Modifier = Modifier) {
     }
 }
 
+// NEW: Celebration animation for no allergens found
+@Composable
+fun NoAllergensCelebration() {
+    val infiniteTransition = rememberInfiniteTransition(label = "no_allergens_celebration")
 
-// MODIFIED: This composable now accepts a composable lambda for its content
+    // Scale and Alpha animation for "WOOOW!!!" text
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wooow_scale"
+    )
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "wooow_alpha"
+    )
+
+    // Haptic feedback for a more satisfying feel
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        val vibrator = ContextCompat.getSystemService(context, Vibrator::class.java)
+        vibrator?.let {
+            if (it.hasVibrator()) {
+                // Short, strong burst
+                // FIXED: Suppress lint warning for VIBRATE permission.
+                // This assumes you have <uses-permission android:name="android.permission.VIBRATE" />
+                // in your AndroidManifest.xml
+                @SuppressLint("MissingPermission")
+                it.vibrate(VibrationEffect.createOneShot(100, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(80.dp), // Give enough space for animation
+        contentAlignment = Alignment.Center
+    ) {
+        // "WOOOW!!!" Text
+        Text(
+            "WOOOW!!!",
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Black,
+            color = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier
+                .scale(scale)
+                .alpha(alpha)
+        )
+
+        // Simple sparkles animation
+        val sparkleColors = listOf(Color.Yellow, Color.Cyan, Color.Magenta, Color.Green)
+        repeat(5) { index ->
+            val sparkleOffset by infiniteTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 1500 + (index * 200), easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "sparkle_offset_$index"
+            )
+            val sparkleAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.5f,
+                targetValue = 0f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 1500 + (index * 200), easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "sparkle_alpha_$index"
+            )
+
+            val xOffset = remember { Random.nextInt(-70, 70).dp }
+            val yOffset = remember { Random.nextInt(-20, 20).dp }
+            val size = remember { Random.nextInt(5, 12).dp }
+            val color = remember { sparkleColors[Random.nextInt(sparkleColors.size)] }
+
+            Box(
+                modifier = Modifier
+                    .offset(x = xOffset * sparkleOffset, y = yOffset * sparkleOffset)
+                    .size(size)
+                    .alpha(sparkleAlpha)
+                    .background(color, CircleShape)
+            )
+        }
+    }
+}
+
+
+// FIXED: This composable is now simplified and no longer scrolls.
 @Composable
 fun InfoColumn(
     icon: ImageVector? = null,
     title: String,
-    buttonText: String,
-    onButtonClick: () -> Unit,
     titleColor: Color = Color.Black,
-    content: @Composable ColumnScope.() -> Unit // CHANGED
+    content: @Composable ColumnScope.() -> Unit
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier.fillMaxHeight()
+        modifier = Modifier.fillMaxWidth() // No longer scrolls or fills max size
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            icon?.let {
-                Icon(
-                    imageVector = it,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = titleColor // Tint the icon with the title color
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-            Text(
-                title,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = titleColor,
-                textAlign = TextAlign.Center
+        icon?.let {
+            Icon(
+                imageVector = it,
+                contentDescription = null,
+                modifier = Modifier.size(48.dp),
+                tint = titleColor // Tint the icon with the title color
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+        Text(
+            title,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            color = titleColor,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
 
-            // CHANGED: Call the content lambda
-            content()
-        }
-        // Push button to the bottom of the sheet
-        Spacer(modifier = Modifier.weight(1f))
-        Button(
-            onClick = onButtonClick,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(buttonText)
-        }
+        // Call the content lambda
+        content()
+
+        // Removed the Spacer(weight) and Button from here
     }
 }
 
