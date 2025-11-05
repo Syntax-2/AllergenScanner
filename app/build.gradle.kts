@@ -6,16 +6,16 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    // --- NEW: Add KSP for Room's code generation ---
+    id("com.google.devtools.ksp") version "1.9.23-1.0.20"
 }
 
 android {
-    // FIXED: Must match your package name "com.example.allergiesscanner"
-    namespace = "com.example.allergenscanner"
+    namespace = "com.example.allergenscanner" // Make sure this matches your package name
     compileSdk = 34
 
     defaultConfig {
-        // FIXED: Must match your package name "com.example.allergiesscanner"
-        applicationId = "com.example.allergencanner"
+        applicationId = "com.example.allergenscanner" // Make sure this matches
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -47,7 +47,7 @@ android {
         compose = true
     }
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.1"
+        kotlinCompilerExtensionVersion = "1.5.11" // Matched to KSP version
     }
     packaging {
         resources {
@@ -66,11 +66,11 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose") // Version removed, handled by BOM
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose")
 
     // --- Compose Libraries for UI ---
-    implementation("androidx.compose.material:material-icons-extended") // Version removed, handled by BOM
-    implementation("androidx.compose.animation:animation") // ADDED: This fixes the AnimatedVisibility error
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.animation:animation")
 
     // --- CameraX (for Camera Preview) ---
     val cameraxVersion = "1.3.4"
@@ -88,6 +88,12 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0") // Optional: for debugging
 
+    // --- NEW: Room Database ---
+    val roomVersion = "2.6.1"
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
+    implementation("androidx.room:room-compiler:$roomVersion")
+
     // --- Testing ---
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
@@ -97,4 +103,3 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
-

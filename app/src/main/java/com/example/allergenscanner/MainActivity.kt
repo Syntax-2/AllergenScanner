@@ -17,6 +17,7 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -28,8 +29,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -37,7 +42,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,8 +57,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -60,6 +69,9 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.random.Random
 
@@ -85,20 +97,101 @@ class MainActivity : ComponentActivity() {
         setContent {
             // A simple theme
             MaterialTheme {
-                AllergenScannerScreen(viewModel) {
-                    // Ask for permission when the Composable needs it
-                    requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+                // --- UPDATED: Call the new main app screen ---
+                MainAppScreen(
+                    viewModel = viewModel,
+                    onRequestPermission = {
+                        requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                )
+            }
+        }
+    }
+}
+
+// --- NEW: Main App Composable with Bottom Navigation ---
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainAppScreen(
+    viewModel: MainViewModel,
+    onRequestPermission: () -> Unit
+) {
+    var selectedScreen by remember { mutableStateOf("scanner") }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        when (selectedScreen) {
+                            "scanner" -> "Allergen Scanner"
+                            "profile" -> "My Allergen Profile"
+                            "history" -> "Scan History"
+                            else -> "Allergen Scanner"
+                        }
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = Color.White
+                )
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    icon = { Icon(Icons.Filled.CameraAlt, contentDescription = "Scanner") },
+                    label = { Text("Scanner") },
+                    selected = selectedScreen == "scanner",
+                    onClick = { selectedScreen = "scanner" }
+                )
+                // --- NEW: History Tab ---
+                NavigationBarItem(
+                    icon = { Icon(Icons.Filled.History, contentDescription = "History") },
+                    label = { Text("History") },
+                    selected = selectedScreen == "history",
+                    onClick = { selectedScreen = "history" }
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Filled.Person, contentDescription = "Profile") },
+                    label = { Text("Profile") },
+                    selected = selectedScreen == "profile",
+                    onClick = { selectedScreen = "profile" }
+                )
+            }
+        }
+    ) { padding ->
+        // Content area
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding) // Apply padding from the Scaffold
+        ) {
+            Crossfade(targetState = selectedScreen, label = "screen_switch") { screen ->
+                when (screen) {
+                    "scanner" -> AllergenScannerScreen(
+                        viewModel = viewModel,
+                        onRequestPermission = onRequestPermission
+                    )
+                    "history" -> HistoryScreen(
+                        viewModel = viewModel
+                    )
+                    "profile" -> ProfileScreen(
+                        viewModel = viewModel
+                    )
                 }
             }
         }
     }
 }
 
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AllergenScannerScreen(
     viewModel: MainViewModel,
     onRequestPermission: () -> Unit
+    // onShowProfile was removed
 ) {
     val context = LocalContext.current
     var hasCameraPermission by remember {
@@ -123,28 +216,16 @@ fun AllergenScannerScreen(
 
     // --- Bottom Sheet State ---
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val isSheetVisible = uiState.isLoading || uiState.product != null || uiState.errorMessage != null
+    val isSheetVisible = uiState.isLoading || uiState.scanResult != ScanResult.None || uiState.errorMessage != null
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Allergen Scanner") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = Color.White
-                )
-            )
-        }
-    ) { padding ->
+    // --- UPDATED: Root is now a Box, not Scaffold ---
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
+            modifier = Modifier.fillMaxSize(), // No padding here, padding is from parent
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (hasCameraPermission) {
                 // --- Camera Preview Box ---
-                // This Box fills the remaining space (due to weight)
                 Box(
                     modifier = Modifier.weight(1f)
                 ) {
@@ -152,22 +233,16 @@ fun AllergenScannerScreen(
                         onBarcodeScanned = { barcode ->
                             viewModel.onBarcodeScanned(barcode)
                         },
-                        // Only analyze if no product is currently displayed
                         isAnalysisPaused = isSheetVisible
                     )
-
-                    // NEW: Add the scanner overlay
                     ScannerOverlay()
-
-                    // FIXED: Re-added a wrapper Box to explicitly break the ColumnScope
                     Box(
-                        modifier = Modifier.align(Alignment.BottomCenter) // This align works on the Box
+                        modifier = Modifier.align(Alignment.BottomCenter)
                     ) {
-                        // FIXED: Use fully qualified name to resolve scope ambiguity
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = !isSheetVisible, // Show when sheet is hidden
+                            visible = !isSheetVisible,
                             modifier = Modifier
-                                .fillMaxWidth() // This modifier is for the AnimatedVisibility itself
+                                .fillMaxWidth()
                                 .background(Color.Black.copy(alpha = 0.4f))
                                 .padding(16.dp),
                             enter = fadeIn(),
@@ -184,35 +259,7 @@ fun AllergenScannerScreen(
                 }
             } else {
                 // --- Improved Permission Request UI ---
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        Icons.Filled.CameraAlt,
-                        contentDescription = "Camera Icon",
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "Camera Permission Needed",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "This app needs camera access to scan barcodes.",
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Button(onClick = onRequestPermission) {
-                        Text("Grant Camera Permission")
-                    }
-                }
+                PermissionRequestUI(onRequestPermission)
             }
         }
 
@@ -224,19 +271,18 @@ fun AllergenScannerScreen(
                 containerColor = Color.White,
                 shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
             ) {
-                // Create local variables to avoid smart cast errors
                 val currentErrorMessage = uiState.errorMessage
-                val currentProduct = uiState.product
+                val scanResult = uiState.scanResult
 
-                // FIXED: This is now a Column that can scroll
+                // --- UPDATED: Simplified layout logic ---
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .defaultMinSize(minHeight = 220.dp) // Give it some space
+                        .defaultMinSize(minHeight = 220.dp)
                         .padding(16.dp)
-                        .animateContentSize() // NEW: Animate size changes
-                        .verticalScroll(rememberScrollState()), // FIXED: Scrolling is here
-                    horizontalAlignment = Alignment.CenterHorizontally // FIXED: Alignment is here
+                        .animateContentSize()
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     when {
                         // Loading
@@ -245,106 +291,19 @@ fun AllergenScannerScreen(
                         }
                         // Error
                         currentErrorMessage != null -> {
-                            InfoColumn( // This no longer scrolls or has a button
-                                icon = Icons.Filled.Error,
-                                title = "Error",
-                                titleColor = MaterialTheme.colorScheme.error
-                            ) {
-                                // Pass error message as content
-                                Text(currentErrorMessage, fontSize = 16.sp, textAlign = TextAlign.Center)
-                            }
-                            // FIXED: Button is now outside InfoColumn
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = { viewModel.clearProduct() },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Scan Again")
+                            ScanErrorResult(currentErrorMessage) {
+                                viewModel.clearProduct()
                             }
                         }
-                        // Success
-                        currentProduct != null -> {
-                            val allergensList = currentProduct.allergensTags
-                                ?.map {
-                                    it.removePrefix("en:").replace("-", " ")
-                                        .replaceFirstChar { char -> if (char.isLowerCase()) char.uppercase() else char.toString() }
-                                }
-                                ?: emptyList()
-
-                            // --- NEW: Get traces list ---
-                            val tracesList = currentProduct.tracesTags
-                                ?.map {
-                                    it.removePrefix("en:").replace("-", " ")
-                                        .replaceFirstChar { char -> if (char.isLowerCase()) char.uppercase() else char.toString() }
-                                }
-                                ?: emptyList()
-
-                            val hasAllergens = allergensList.isNotEmpty()
-                            val hasTraces = tracesList.isNotEmpty()
-                            // --- NEW: Only celebrate if BOTH are empty ---
-                            val isTrulyClear = !hasAllergens && !hasTraces
-
-                            InfoColumn( // This no longer scrolls or has a button
-                                icon = if (isTrulyClear) Icons.Filled.CheckCircle else Icons.Filled.Info,
-                                title = currentProduct.productName ?: "Unknown Product",
-                                titleColor = if (isTrulyClear) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                            ) {
-                                // This content Column is fine, as it's inside the parent scrolling Column
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    // --- Main Allergens ---
-                                    Text("Contains Allergens:", fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    if (hasAllergens) {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            allergensList.forEach { allergen ->
-                                                Chip(allergen, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
-                                            }
-                                        }
-                                    } else {
-                                        Text("None found.", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                                    }
-
-                                    // --- Traces ("May Contain") ---
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    Text("May Contain Traces Of:", fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth())
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    if (hasTraces) {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            tracesList.forEach { trace ->
-                                                Chip(trace, Color(0xFFFFF0E0), Color(0xFF8B4513)) // Light Orange / Brown text
-                                            }
-                                        }
-                                    } else {
-                                        Text("None found.", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-                                    }
-
-                                    // --- NEW: Celebration ---
-                                    if (isTrulyClear) {
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        Box(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            NoAllergensCelebration()
-                                        }
-                                    }
-                                }
+                        // --- UPDATED: SAFE/UNSAFE Logic ---
+                        scanResult is ScanResult.Unsafe -> {
+                            UnsafeResult(scanResult.conflictingAllergens) {
+                                viewModel.clearProduct()
                             }
-                            // FIXED: Button is now outside InfoColumn
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(
-                                onClick = { viewModel.clearProduct() },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Scan New Item")
+                        }
+                        scanResult is ScanResult.Safe -> {
+                            SafeResult {
+                                viewModel.clearProduct()
                             }
                         }
                     }
@@ -354,7 +313,261 @@ fun AllergenScannerScreen(
     }
 }
 
-// NEW: Reusable Chip composable
+// --- NEW: History Screen Composable ---
+@Composable
+fun HistoryScreen(viewModel: MainViewModel) {
+    val uiState by viewModel.uiState.collectAsState()
+    val history = uiState.scanHistory
+
+    // Date formatter for the list
+    val dateFormatter = remember {
+        SimpleDateFormat("MMM d, yyyy h:mm a", Locale.getDefault())
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp)
+    ) {
+        if (history.isEmpty()) {
+            item {
+                Text(
+                    "Your scan history is empty.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 32.dp)
+                )
+            }
+        } else {
+            items(history) { item ->
+                HistoryItemCard(item = item, dateFormatter = dateFormatter)
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+    }
+}
+
+// --- NEW: Card for a single History Item ---
+@Composable
+fun HistoryItemCard(item: ScanHistoryItem, dateFormatter: SimpleDateFormat) {
+    val isUnsafe = item.scanResult == "UNSAFE"
+    val cardColor = if (isUnsafe) MaterialTheme.colorScheme.errorContainer else Color.White
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = cardColor)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isUnsafe) Icons.Filled.Warning else Icons.Filled.CheckCircle,
+                contentDescription = item.scanResult,
+                tint = if (isUnsafe) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    item.productName,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    dateFormatter.format(Date(item.scanTime)),
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+                if (isUnsafe && item.conflictingAllergens.isNotEmpty()) {
+                    Text(
+                        "Conflicts: ${item.conflictingAllergens}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+
+// --- NEW: Profile Screen Composable ---
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfileScreen(
+    viewModel: MainViewModel
+    // onBack was removed
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    val userProfile = uiState.userProfile
+    val allAllergens = allAllergensForProfile // Get the master list
+
+    // --- UPDATED: Root is now LazyColumn, not Scaffold ---
+    LazyColumn(
+        modifier = Modifier.fillMaxSize() // Padding is handled by parent Scaffold
+    ) {
+        item {
+            Text(
+                "Select items you are allergic to. The app will warn you if they are found in a product's ingredients or traces.",
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        items(allAllergens) { allergen ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = userProfile.contains(allergen),
+                        onValueChange = { viewModel.toggleAllergen(allergen) },
+                        role = Role.Checkbox
+                    )
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = userProfile.contains(allergen),
+                    onCheckedChange = null // Handled by Row's toggleable
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(allergen, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    }
+}
+
+
+// --- NEW: Composable for "UNSAFE" result ---
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun UnsafeResult(conflicts: List<String>, onScanNew: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(
+            // UPDATED: Stronger icon
+            Icons.Filled.Warning,
+            contentDescription = "Unsafe",
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.error
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "UNSAFE",
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Black,
+            color = MaterialTheme.colorScheme.error
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            "This product contains or may contain allergens from your profile:",
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            conflicts.forEach { allergen ->
+                Chip(allergen, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer)
+            }
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        DisclaimerCard()
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onScanNew, modifier = Modifier.fillMaxWidth()) {
+            Text("Scan New Item")
+        }
+    }
+}
+
+// --- NEW: Composable for "SAFE" result ---
+@Composable
+fun SafeResult(onScanNew: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(
+            Icons.Filled.CheckCircle,
+            contentDescription = "Safe",
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "SAFE",
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Black,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            "This product appears to be safe based on your profile.",
+            textAlign = TextAlign.Center
+        )
+
+        NoAllergensCelebration() // "WOOOW!!!"
+
+        Spacer(modifier = Modifier.height(16.dp))
+        DisclaimerCard()
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onScanNew, modifier = Modifier.fillMaxWidth()) {
+            Text("Scan New Item")
+        }
+    }
+}
+
+// --- NEW: Composable for "ERROR" result ---
+@Composable
+fun ScanErrorResult(message: String, onScanNew: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(
+            Icons.Filled.Error,
+            contentDescription = "Error",
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.error
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "Error",
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.error
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(message, textAlign = TextAlign.Center)
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onScanNew, modifier = Modifier.fillMaxWidth()) {
+            Text("Scan Again")
+        }
+    }
+}
+
+// --- NEW: Permanent Disclaimer Card ---
+@Composable
+fun DisclaimerCard() {
+    Card(
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF9C4)) // Light Yellow
+    ) {
+        Text(
+            "Data is from a public database and may be incomplete or inaccurate. ALWAYS double-check the product's physical label before consuming.",
+            modifier = Modifier.padding(10.dp),
+            color = Color(0xFFF57F17), // Dark Yellow/Orange
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            fontSize = 13.sp
+        )
+    }
+}
+
+// --- NEW: Reusable Chip composable ---
 @Composable
 fun Chip(text: String, backgroundColor: Color, textColor: Color) {
     Card(
@@ -367,6 +580,40 @@ fun Chip(text: String, backgroundColor: Color, textColor: Color) {
             color = textColor,
             fontSize = 14.sp
         )
+    }
+}
+
+// --- NEW: Permission Request UI ---
+@Composable
+fun PermissionRequestUI(onRequestPermission: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            Icons.Filled.CameraAlt,
+            contentDescription = "Camera Icon",
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            "Camera Permission Needed",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "This app needs camera access to scan barcodes.",
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(onClick = onRequestPermission) {
+            Text("Grant Camera Permission")
+        }
     }
 }
 
@@ -495,6 +742,7 @@ private class BarcodeAnalyzer(
 
 // NEW: Composable for the scanner reticle and laser
 @Composable
+@Suppress("UnusedBoxWithConstraintsScope") // FIXED: Added suppression for linter warning
 fun ScannerOverlay(modifier: Modifier = Modifier) {
     val infiniteTransition = rememberInfiniteTransition(label = "scanner_laser")
 
@@ -573,9 +821,6 @@ fun NoAllergensCelebration() {
         vibrator?.let {
             if (it.hasVibrator()) {
                 // Short, strong burst
-                // FIXED: Suppress lint warning for VIBRATE permission.
-                // This assumes you have <uses-permission android:name="android.permission.VIBRATE" />
-                // in your AndroidManifest.xml
                 @SuppressLint("MissingPermission")
                 it.vibrate(VibrationEffect.createOneShot(100, VibrationEffect.DEFAULT_AMPLITUDE))
             }
@@ -636,42 +881,3 @@ fun NoAllergensCelebration() {
         }
     }
 }
-
-
-// FIXED: This composable is now simplified and no longer scrolls.
-@Composable
-fun InfoColumn(
-    icon: ImageVector? = null,
-    title: String,
-    titleColor: Color = Color.Black,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth() // No longer scrolls or fills max size
-    ) {
-        icon?.let {
-            Icon(
-                imageVector = it,
-                contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = titleColor // Tint the icon with the title color
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-        Text(
-            title,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-            color = titleColor,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Call the content lambda
-        content()
-
-        // Removed the Spacer(weight) and Button from here
-    }
-}
-

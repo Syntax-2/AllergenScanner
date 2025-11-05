@@ -25,9 +25,9 @@ data class ProductResponse(
 data class Product(
     @SerializedName("product_name") val productName: String?,
     @SerializedName("allergens_tags") val allergensTags: List<String>?,
-    // --- NEW FIELD ---
-    // This will get the "May contain..." warnings
-    @SerializedName("traces_tags") val tracesTags: List<String>?
+    @SerializedName("traces_tags") val tracesTags: List<String>?,
+    // --- UPDATED: Add ingredients_text ---
+    @SerializedName("ingredients_text") val ingredientsText: String?
 )
 
 // --- Retrofit API Service ---
@@ -61,4 +61,3 @@ object ApiClient {
         retrofit.create(OpenFoodFactsApi::class.java)
     }
 }
-
